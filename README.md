@@ -1,1 +1,1 @@
-# gaestebuch
+# Simple PHP Gästebuch
