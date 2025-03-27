@@ -63,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $hcaptcha_response = $_POST['h-captcha-response'] ?? '';
 
     // hCaptcha Secret Key
-    $secret_key = 'ES_38014ca7d9e14790bcd294df4c8e4979';  // Ersetze mit deinem echten Secret Key
+    $secret_key = 'KEY';  // Ersetze mit deinem echten Secret Key
     $verify_url = 'https://api.hcaptcha.com/siteverify';
 
     // Anfrage zur Überprüfung an hCaptcha senden
