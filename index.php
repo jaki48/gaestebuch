@@ -4,12 +4,37 @@ ini_set('display_errors', 1);
 
 require_once 'lib/pd.php'; // Parsedown für Markdown-Unterstützung
 
-$guestbookFile = 'guestbook.json';
+$guestbookFile = 'guestbook.enc.json';
+$encryptionKey = 'your-secret-key'; // Ersetze dies durch einen sicheren Schlüssel
 
-// Lade existierende Einträge aus der JSON-Datei
+// Verschlüssle Daten
+function encryptData($data, $key) {
+    $iv = random_bytes(16); // Initialisierungsvektor
+    $encryptedData = openssl_encrypt($data, 'AES-256-CBC', $key, 0, $iv);
+    if ($encryptedData === false) {
+        die("Fehler beim Verschlüsseln der Daten.");
+    }
+    return base64_encode($iv . $encryptedData);
+}
+
+// Entschlüssle Daten
+function decryptData($data, $key) {
+    $data = base64_decode($data);
+    $iv = substr($data, 0, 16);
+    $encryptedData = substr($data, 16);
+    $decryptedData = openssl_decrypt($encryptedData, 'AES-256-CBC', $key, 0, $iv);
+    if ($decryptedData === false) {
+        die("Fehler beim Entschlüsseln der Daten.");
+    }
+    return $decryptedData;
+}
+
+// Lade existierende Einträge aus der verschlüsselten JSON-Datei
 function loadGuestbook($file) {
+    global $encryptionKey;
     if (file_exists($file)) {
-        $jsonData = file_get_contents($file);
+        $encryptedData = file_get_contents($file);
+        $jsonData = decryptData($encryptedData, $encryptionKey);
         $entries = json_decode($jsonData, true);
         if ($entries === null && json_last_error() !== JSON_ERROR_NONE) {
             die("Fehler beim Lesen der JSON-Datei: " . json_last_error_msg());
@@ -19,13 +44,15 @@ function loadGuestbook($file) {
     return [];
 }
 
-// Speichere Einträge in die JSON-Datei
+// Speichere Einträge in die verschlüsselte JSON-Datei
 function saveGuestbook($file, $entries) {
+    global $encryptionKey;
     $jsonData = json_encode($entries, JSON_PRETTY_PRINT);
     if ($jsonData === false) {
         die("JSON-Encoding-Fehler: " . json_last_error_msg());
     }
-    if (file_put_contents($file, $jsonData) === false) {
+    $encryptedData = encryptData($jsonData, $encryptionKey);
+    if (file_put_contents($file, $encryptedData) === false) {
         die("Fehler beim Schreiben der Datei $file.");
     }
 }
