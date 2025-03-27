@@ -1,171 +1,224 @@
 <?php
-// Backend-Logik
-define('DATA_FILE', 'entries.json');
-define('ENCRYPTION_KEY', 'your-secret-key'); // Ändere dies zu einem sicheren Schlüssel
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
-if (!file_exists(DATA_FILE)) {
-    file_put_contents(DATA_FILE, encryptData(json_encode([]), ENCRYPTION_KEY));
-}
+require_once 'lib/pd.php'; // Parsedown für Markdown-Unterstützung
 
-function encryptData($data, $key) {
-    return openssl_encrypt($data, 'AES-256-CBC', $key, 0, substr($key, 0, 16));
-}
+$guestbookFile = 'guestbook.json';
 
-function decryptData($data, $key) {
-    return openssl_decrypt($data, 'AES-256-CBC', $key, 0, substr($key, 0, 16));
-}
-
-function getEntries() {
-    if (!file_exists(DATA_FILE)) {
-        return [];
+// Lade existierende Einträge aus der JSON-Datei
+function loadGuestbook($file) {
+    if (file_exists($file)) {
+        $jsonData = file_get_contents($file);
+        $entries = json_decode($jsonData, true);
+        if ($entries === null && json_last_error() !== JSON_ERROR_NONE) {
+            die("Fehler beim Lesen der JSON-Datei: " . json_last_error_msg());
+        }
+        return $entries ?? [];
     }
-    $encryptedData = file_get_contents(DATA_FILE);
-    $json = decryptData($encryptedData, ENCRYPTION_KEY);
-    return $json ? json_decode($json, true) : [];
+    return [];
 }
 
-function saveEntry($name, $message) {
-    $entries = getEntries();
-    $entries[] = ['name' => $name, 'message' => $message, 'timestamp' => time()];
-    $json = json_encode($entries);
-    $encryptedData = encryptData($json, ENCRYPTION_KEY);
-    file_put_contents(DATA_FILE, $encryptedData);
+// Speichere Einträge in die JSON-Datei
+function saveGuestbook($file, $entries) {
+    $jsonData = json_encode($entries, JSON_PRETTY_PRINT);
+    if ($jsonData === false) {
+        die("JSON-Encoding-Fehler: " . json_last_error_msg());
+    }
+    if (file_put_contents($file, $jsonData) === false) {
+        die("Fehler beim Schreiben der Datei $file.");
+    }
 }
 
+// Verarbeite das Formular
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name = trim($_POST['name'] ?? '');
-    $message = trim($_POST['message'] ?? '');
-    if ($name && $message) {
-        saveEntry($name, $message);
-        echo json_encode(['success' => true]);
-    } else {
-        echo json_encode(['success' => false, 'error' => 'Name und Nachricht sind erforderlich.']);
+    // hCaptcha-Überprüfung
+    $hcaptcha_response = $_POST['h-captcha-response'] ?? '';
+
+    // hCaptcha Secret Key
+    $secret_key = 'ES_38014ca7d9e14790bcd294df4c8e4979';  // Ersetze mit deinem echten Secret Key
+    $verify_url = 'https://api.hcaptcha.com/siteverify';
+
+    // Anfrage zur Überprüfung an hCaptcha senden
+    $response = file_get_contents($verify_url . "?secret={$secret_key}&response={$hcaptcha_response}");
+    $responseKeys = json_decode($response, true);
+
+    if (!$responseKeys['success']) {
+        die("Fehler: hCaptcha-Verifizierung fehlgeschlagen.");
     }
-    exit;
+
+    // Falls validiert, speichere den Eintrag
+    $name = trim($_POST['name']);
+    $message = trim(htmlspecialchars($_POST['message']));
+    $ipAddress = $_SERVER['REMOTE_ADDR'];
+
+    if (!empty($name) && !empty($message)) {
+        $entries = loadGuestbook($guestbookFile);
+        $id = count($entries) + 1;
+
+        $entries[] = [
+            'id' => $id,
+            'name' => htmlspecialchars($name),
+            'message' => $message,
+            'ip' => $ipAddress,
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+
+        saveGuestbook($guestbookFile, $entries);
+        header('Location: ' . $_SERVER['PHP_SELF']);
+        exit;
+    } else {
+        $error = "Bitte füllen Sie alle Felder aus.";
+    }
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    header('Content-Type: application/json');
-    echo json_encode(getEntries());
-    exit;
-}
+$entries = loadGuestbook($guestbookFile);
+$Parsedown = new Parsedown(); // Parsedown-Instanz erstellen
 ?>
+
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gästebuch</title>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-  <script type="importmap">
-    {
-      "imports": {
-        "@material/web/": "https://esm.run/@material/web/"
-      }
-    }
-  </script>
-  <script type="module">
-    import '@material/web/all.js';
-    import {styles as typescaleStyles} from '@material/web/typography/md-typescale-styles.js';
-    document.adoptedStyleSheets.push(typescaleStyles.styleSheet);
-  </script>
-  <style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gästebuch</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+    <link rel="stylesheet" href="https://code.getmdl.io/1.3.0/material.indigo-pink.min.css">
+    <script defer src="https://code.getmdl.io/1.3.0/material.min.js"></script>
+
+    <!-- hCaptcha Script -->
+    <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 20px; background-color: #fff }
+        .entry { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; border-radius: 4px; }
+        .entry .name { font-weight: bold; }
+        .entry .timestamp { font-size: 0.8em; color: #666; }
+        .entry .meta { font-size: 0.8em; color: #888; }
+        .form-container { max-width: 600px; margin: auto; }
+        .entries-container { max-width: 600px; margin: auto; margin-top: 20px; }
+        .mdl-dialog { width: 400px; border-radius: 4px; }
+        .fab {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            background-color: #FF4081;
+        }
+		img {
+    width: 400px;
+    height: 300px;
+    object-fit: cover; /* Schneidet das Bild passend zu */
+    border-radius: 4px; /* Abgerundete Ecken */
+}
+.h-captcha {
+    position: relative;
+    z-index: 1001; /* Höher als dein Popup */
+}
+
+.grecaptcha-badge {
+    z-index: 1002 !important; /* Stellt sicher, dass es sichtbar bleibt */
+}
+/* Dark Mode */
+@media (prefers-color-scheme: dark) {
     body {
-      font-family: 'Roboto', sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 20px;
-      background-color: #f5f5f5;
-      position: relative;
+        background-color: #121212;
+        color: #ffffff;
     }
-    .container {
-      max-width: 600px;
-      width: 100%;
-      background: white;
-      padding: 20px;
-      border-radius: 12px;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
+
     .entry {
-      margin-top: 10px;
-      padding: 10px;
-      border-bottom: 1px solid #ddd;
+        background-color: #1e1e1e;
+        border-color: #333;
     }
-    md-fab {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
+
+    .mdl-dialog {
+        background-color: #1e1e1e;
+        color: #fff;
     }
-    md-dialog {
-      width: 400px;
+
+    .mdl-textfield__input {
+        color: #fff;
     }
-  </style>
+
+    .mdl-textfield__label {
+        color: rgba(255, 255, 255, 0.7);
+    }
+}
+    </style>
 </head>
 <body>
-  <div class="container" id="mainContainer">
-    <h2>Gästebuch</h2>
-    <div id="entries"></div>
-  </div>
-  
-  <md-fab id="openDialog" aria-label="Edit">
-    <md-icon slot="icon">edit</md-icon>
-  </md-fab>
-  
-  <md-dialog id="entryDialog">
-    <div slot="headline">Neuer Eintrag</div>
-    <div slot="content">
-      <md-outlined-text-field id="name" label="Name"></md-outlined-text-field>
-      <md-outlined-text-field id="message" label="Nachricht" rows="4" textarea></md-outlined-text-field>
+    <div class="form-container">
+        <h1 class="mdl-typography--title">Gästebuch</h1>
     </div>
-    <div slot="actions">
-      <md-text-button id="closeDialog">Abbrechen</md-text-button>
-      <md-filled-button id="submit">Eintragen</md-filled-button>
+
+    <div class="entries-container">
+        <h2 class="mdl-typography--headline">Einträge:</h2>
+        <?php if (!empty($entries)): ?>
+            <?php foreach (array_reverse($entries) as $entry): ?>
+                <div class="entry">
+                    <div class="name">#<?= $entry['id'] ?> - <?= htmlspecialchars($entry['name']) ?></div>
+                    <div class="message"><?= $Parsedown->text($entry['message']) ?></div>
+                    <div class="timestamp"><?= $entry['timestamp'] ?></div>
+                </div>
+            <?php endforeach; ?>
+        <?php else: ?>
+            <p>Keine Einträge vorhanden.</p>
+        <?php endif; ?>
     </div>
-  </md-dialog>
-  
-  <script>
-    const dialog = document.getElementById('entryDialog');
-    const entriesContainer = document.getElementById('entries');
 
-    function loadEntries() {
-      fetch(window.location.href)
-        .then(response => response.json())
-        .then(entries => {
-          entriesContainer.innerHTML = '';
-          entries.reverse().forEach(entry => {
-            const entryDiv = document.createElement('div');
-            entryDiv.className = 'entry';
-            entryDiv.innerHTML = `<strong>${entry.name}</strong><p>${entry.message}</p>`;
-            entriesContainer.appendChild(entryDiv);
-          });
+    <!-- Floating Action Button (FAB) für neues Formular -->
+    <button id="addEntryButton" class="mdl-button mdl-js-button mdl-button--fab mdl-button--colored fab">
+        <i class="material-icons">add</i>
+    </button>
+
+    <!-- Popup-Dialog für neues Formular -->
+    <dialog class="mdl-dialog" id="addEntryDialog">
+        <h4 class="mdl-dialog__title">Neuen Eintrag hinzufügen</h4>
+        <div class="mdl-dialog__content">
+            <?php if (!empty($error)): ?>
+                <p style="color: red;"><?= $error ?></p>
+            <?php endif; ?>
+
+            <form method="post" id="entryForm">
+                <div class="mdl-textfield mdl-js-textfield mdl-textfield--floating-label">
+                    <input class="mdl-textfield__input" type="text" id="name" name="name" required>
+                    <label class="mdl-textfield__label" for="name">Name</label>
+                </div>
+
+                <div class="mdl-textfield mdl-js-textfield mdl-textfield--floating-label">
+                    <textarea class="mdl-textfield__input" id="message" name="message" rows="4" required></textarea>
+                    <label class="mdl-textfield__label" for="message">Nachricht (Markdown unterstützt)</label>
+                </div>
+
+                <!-- Sichtbares hCaptcha -->
+                <div class="h-captcha" data-sitekey="66fe25e6-d454-4b22-bdba-f4b016e83612"></div>
+            </form>
+        </div>
+        <div class="mdl-dialog__actions">
+            <button type="submit" form="entryForm" class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored">
+                Absenden
+            </button>
+            <button class="mdl-button mdl-js-button closeDialog">Schließen</button>
+        </div>
+    </dialog>
+
+    <script>
+        // Dialog-Element und Buttons
+        const addEntryDialog = document.querySelector('#addEntryDialog');
+        const addEntryButton = document.querySelector('#addEntryButton');
+        const closeDialogButtons = document.querySelectorAll('.closeDialog');
+
+        // Zeige Dialog beim Klicken auf den Button
+        addEntryButton.addEventListener('click', () => {
+            addEntryDialog.showModal();
         });
-    }
 
-    document.getElementById('openDialog').addEventListener('click', () => dialog.show());
-    document.getElementById('closeDialog').addEventListener('click', () => dialog.close());
-    document.getElementById('submit').addEventListener('click', () => {
-      const name = document.getElementById('name').value.trim();
-      const message = document.getElementById('message').value.trim();
-      if (name && message) {
-        fetch(window.location.href, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ name, message })
-        })
-        .then(response => response.json())
-        .then(result => {
-          if (result.success) {
-            loadEntries();
-            dialog.close();
-          } else {
-            alert(result.error || 'Ein Fehler ist aufgetreten.');
-          }
+        // Schließe Dialog beim Klicken auf "Schließen"
+        closeDialogButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                addEntryDialog.close();
+            });
         });
-      }
-    });
-
-    loadEntries();
-  </script>
+    </script>
 </body>
 </html>
